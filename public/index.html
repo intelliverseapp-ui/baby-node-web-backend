@@ -1,0 +1,42 @@
+<!-- FILE: public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>MGI Inspector v3</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #111;
+            color: #eee;
+            margin: 0;
+            padding: 20px;
+        }
+        #status {
+            margin-bottom: 20px;
+            font-size: 18px;
+            color: #0f0;
+        }
+        #event-list {
+            display: flex;
+            flex-direction: column-reverse;
+            gap: 6px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .event-line {
+            padding: 4px 8px;
+            background: #222;
+            border-left: 4px solid #444;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>MGI Inspector v3</h1>
+    <div id="status">Loading…</div>
+    <div id="event-list"></div>
+
+    <script src="mgi-inspector-v3.js"></script>
+</body>
+</html>

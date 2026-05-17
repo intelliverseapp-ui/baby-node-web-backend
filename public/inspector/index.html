@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Meaning Graph Inspector</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #05060a;
+      color: #f5f5f7;
+      display: flex;
+      height: 100vh;
+    }
+    #sidebar {
+      width: 320px;
+      border-right: 1px solid #222;
+      padding: 12px;
+      box-sizing: border-box;
+      background: #0b0d12;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 4px 0;
+    }
+    h2 {
+      font-size: 14px;
+      margin: 12px 0 4px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #888;
+    }
+    .status {
+      font-size: 12px;
+      color: #aaa;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: #111827;
+      color: #e5e7eb;
+      margin-right: 4px;
+    }
+    .pill.physiology { background: #1f2937; color: #93c5fd; }
+    .pill.cognition { background: #1f2937; color: #fbbf24; }
+    .pill.system { background: #1f2937; color: #a5b4fc; }
+
+    #eventList {
+      flex: 1;
+      overflow-y: auto;
+      border-radius: 6px;
+      background: #05060a;
+      border: 1px solid #111827;
+      padding: 8px;
+      font-size: 12px;
+    }
+    .event {
+      padding: 6px 8px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      background: #050814;
+      border: 1px solid #111827;
+      cursor: pointer;
+    }
+    .event:hover {
+      border-color: #2563eb;
+      background: #050a1a;
+    }
+    .event-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2px;
+    }
+    .event-type {
+      font-weight: 600;
+    }
+    .event-domain {
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .event-payload {
+      font-size: 11px;
+      color: #d1d5db;
+    }
+    .event-id {
+      font-size: 10px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+
+    #detail {
+      flex: 1;
+      border-radius: 6px;
+      background: #05060a;
+      border: 1px solid #111827;
+      padding: 8px;
+      font-size: 12px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    #graphHint {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h1>Meaning Graph Inspector</h1>
+    <div class="status" id="status">Connecting to /mgi/live…</div>
+
+    <h2>Stream</h2>
+    <div>
+      <span class="pill system">system</span>
+      <span class="pill physiology">physiology</span>
+      <span class="pill cognition">cognition</span>
+    </div>
+
+    <h2>Events</h2>
+    <div id="eventList"></div>
+  </div>
+
+  <div id="main">
+    <h2>Event detail</h2>
+    <div id="detail">Select an event on the left to inspect its full payload and causal links.</div>
+    <div id="graphHint">
+      This is the semantic substrate. Next step: render parent → child as a live graph.
+    </div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const eventListEl = document.getElementById('eventList');
+    const detailEl = document.getElementById('detail');
+
+    const eventsById = new Map();
+
+    function domainClass(domain) {
+      if (domain === 'physiology') return 'physiology';
+      if (domain === 'cognition') return 'cognition';
+      if (domain === 'system') return 'system';
+      return '';
+    }
+
+    function renderEventItem(event) {
+      const div = document.createElement('div');
+      div.className = 'event';
+      div.dataset.id = event.id;
+
+      const header = document.createElement('div');
+      header.className = 'event-header';
+
+      const left = document.createElement('div');
+      const typeSpan = document.createElement('span');
+      typeSpan.className = 'event-type';
+      typeSpan.textContent = event.type;
+
+      const domainSpan = document.createElement('span');
+      domainSpan.className = 'event-domain';
+      domainSpan.textContent = ` · ${event.domain}`;
+
+      left.appendChild(typeSpan);
+      left.appendChild(domainSpan);
+
+      const pill = document.createElement('span');
+      pill.className = 'pill ' + domainClass(event.domain);
+      pill.textContent = event.domain;
+
+      header.appendChild(left);
+      header.appendChild(pill);
+
+      const payload = document.createElement('div');
+      payload.className = 'event-payload';
+
+      const label = event.payload?.label?.string ?? event.payload?.label ?? null;
+      const emoji = event.payload?.emoji?.string ?? event.payload?.emoji ?? null;
+      const energyAfter = event.payload?.energyAfter?.int ?? event.payload?.energyAfter ?? null;
+
+      if (label || emoji || energyAfter !== null) {
+        const bits = [];
+        if (emoji) bits.push(emoji);
+        if (label) bits.push(label);
+        if (energyAfter !== null) bits.push(`energy: ${energyAfter}`);
+        payload.textContent = bits.join(' · ');
+      } else {
+        payload.textContent = JSON.stringify(event.payload);
+      }
+
+      const idLine = document.createElement('div');
+      idLine.className = 'event-id';
+      idLine.textContent = event.id;
+
+      div.appendChild(header);
+      div.appendChild(payload);
+      div.appendChild(idLine);
+
+      div.addEventListener('click', () => showDetail(event.id));
+
+      return div;
+    }
+
+    function showDetail(id) {
+      const event = eventsById.get(id);
+      if (!event) return;
+
+      const parent = event.parent ? eventsById.get(event.parent) : null;
+
+      const lines = [];
+      lines.push(`ID:      ${event.id}`);
+      lines.push(`Domain:  ${event.domain}`);
+      lines.push(`Type:    ${event.type}`);
+      lines.push(`Time:    ${event.timestamp}`);
+      lines.push('');
+      if (event.parent) {
+        lines.push(`Parent:  ${event.parent}${parent ? '' : ' (not in local cache yet)'}`);
+      } else {
+        lines.push('Parent:  —');
+      }
+      lines.push('');
+      lines.push('Payload:');
+      lines.push(JSON.stringify(event.payload, null, 2));
+
+      if (parent) {
+        lines.push('');
+        lines.push('Parent snapshot:');
+        lines.push(JSON.stringify(parent, null, 2));
+      }
+
+      detailEl.textContent = lines.join('\n');
+    }
+
+    async function connect() {
+      try {
+        statusEl.textContent = 'Connecting…';
+
+        // ⭐ FIXED: force IPv4 so browser doesn't get stuck on IPv6 (::1)
+        const response = await fetch('http://127.0.0.1:8080/mgi/live');
+
+        if (!response.body) {
+          statusEl.textContent = 'No stream body available.';
+          return;
+        }
+
+        statusEl.textContent = 'Connected to /mgi/live';
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            statusEl.textContent = 'Stream closed.';
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+
+          let idx;
+          while ((idx = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+
+            if (!line) continue;
+
+            try {
+              const event = JSON.parse(line);
+              eventsById.set(event.id, event);
+
+              const item = renderEventItem(event);
+              eventListEl.appendChild(item);
+              eventListEl.scrollTop = eventListEl.scrollHeight;
+            } catch (e) {
+              console.error('Failed to parse event line', line, e);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Error connecting to /mgi/live';
+      }
+    }
+
+    connect();
+  </script>
+</body>
+</html>
