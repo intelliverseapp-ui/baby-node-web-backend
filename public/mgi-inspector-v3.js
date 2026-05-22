@@ -4,7 +4,7 @@
 console.log("MGI Inspector v3 loaded");
 
 // Connect to Baby Node backend (via Node proxy on port 9000)
-const url = "http://localhost:9000/mgi/live";
+const url = "https://baby-node-web-backend.onrender.com/mgi/live";
 
 const eventList = document.getElementById("event-list");
 const statusEl = document.getElementById("status");

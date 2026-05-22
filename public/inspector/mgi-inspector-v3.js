@@ -3,7 +3,7 @@
 console.log("MGI Inspector v3 loaded");
 
 // Connect to Baby Node backend
-const url = "http://localhost:8080/mgi/live";   // IMPORTANT: localhost, not 127.0.0.1
+const url = "https://baby-node-web-backend.onrender.com/mgi/live";   // IMPORTANT: localhost, not 127.0.0.1
 
 const eventList = document.getElementById("event-list");
 const statusEl = document.getElementById("status");
