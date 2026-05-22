@@ -48,7 +48,7 @@ function startServer() {
     });
 
     server.listen(PORT, () => {
-      log('info', 'Web Lookup backend running', { url: `http://localhost:${PORT}` });
+      log('info', 'Web Lookup backend running', { url: process.env.BASE_URL || `http://localhost:${PORT}` });
       resolve();
     });
 
