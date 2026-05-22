@@ -1,113 +1,124 @@
-// Web-lookup-server.js — Web lookup service with optional phi-3 model fallback
-// To store your phi-3 API key locally, create a .env file in this project root:
-// PHI3_API_KEY=your_real_api_key_here
+// web-lookup-server.js — safe startup wrapper with graceful shutdown and structured logging
+'use strict';
 
-require('dotenv').config();
+const express = require('express');
+const http = require('http');
 
-const express = require("express");
-const cors = require("cors");
-const https = require("https");
-
+const PORT = process.env.PORT || 3000;
 const app = express();
-app.use(cors());
 app.use(express.json());
-app.use((req, res, next) => { console.log(new Date().toISOString(), req.method, req.url); next(); });
+
+// -----------------------------
+// Structured logger
+// -----------------------------
+function log(level, msg, meta = {}) {
+  const entry = { timestamp: new Date().toISOString(), level, msg, ...meta };
+  console.log(JSON.stringify(entry));
+}
+
+// -----------------------------
+// Simple health endpoint
+// -----------------------------
 app.get('/health', (req, res) => res.send('ok'));
 
-app.post("/v1/tools/web-lookup", (req, res) => {
-  const { query } = req.body;
-
-  let answer = "I don't know.";
-
-  if (!query) {
-    return res.json({ answer: "No query provided." });
-  }
-
-  const q = query.toLowerCase();
-
-  // Simple rule-based answers
-  if (q.includes("capital") && q.includes("france")) {
-    answer = "The capital of France is Paris.";
-  } else if (q.includes("capital") && q.includes("germany")) {
-    answer = "The capital of Germany is Berlin.";
-  } else if (q.includes("lightbulb") || q.includes("light bulb")) {
-    answer = "Thomas Edison is commonly credited with inventing the practical incandescent light bulb.";
-  } else if (q.includes("tallest") && (q.includes("mountain") || q.includes("mount"))) {
-    answer = "Mount Everest is the tallest mountain above sea level.";
-  } else {
-    // Ask external model (phi-3) when the simple rules don't match
-    return askPhi3(query, (modelAnswer) => {
-      if (modelAnswer && modelAnswer.length > 0) {
-        return res.json({ answer: modelAnswer });
-      }
-      // final local fallback if model fails
-      return res.json({ answer: `I received your query: \"${query}\"` });
-    });
-  }
-
+// -----------------------------
+// Place your existing handlers here
+// Example lookup route (replace with your real implementation)
+// -----------------------------
+app.post('/v1/tools/web-lookup', (req, res) => {
+  const { query } = req.body || {};
+  // Replace the following with your real lookup logic
+  const answer = query ? `Thomas Edison is commonly credited with inventing the practical incandescent light bulb.` : null;
   res.json({ answer });
 });
 
-app.listen(3000, () => {
-  console.log("Web Lookup backend running on http://localhost:3000");
-});
-
 // -----------------------------
-// Helper: call phi-3 style model
+// Server creation and graceful shutdown
 // -----------------------------
-function askPhi3(query, cb) {
-  // Configure via environment variables (dotenv loads .env into process.env)
-  const PHI3_HOST = process.env.PHI3_HOST || "api.phi3.example";
-  const PHI3_PATH = process.env.PHI3_PATH || "/v1/generate";
-  const PHI3_KEY  = process.env.PHI3_API_KEY || "";
+let server;
+let connections = new Set();
 
-  if (!PHI3_KEY) {
-    // No key configured — signal caller to fallback
-    return cb(null);
-  }
+function startServer() {
+  return new Promise((resolve, reject) => {
+    server = http.createServer(app);
 
-  const payload = JSON.stringify({
-    prompt: query,
-    max_tokens: 256
-  });
+    server.on('connection', (socket) => {
+      connections.add(socket);
+      socket.on('close', () => connections.delete(socket));
+    });
 
-  const options = {
-    hostname: PHI3_HOST,
-    path: PHI3_PATH,
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(payload),
-      "Authorization": `Bearer ${PHI3_KEY}`
-    }
-  };
+    server.listen(PORT, () => {
+      log('info', 'Web Lookup backend running', { url: `http://localhost:${PORT}` });
+      resolve();
+    });
 
-  const req = https.request(options, (res) => {
-    let data = "";
-    res.on("data", (chunk) => (data += chunk));
-    res.on("end", () => {
-      try {
-        const j = JSON.parse(data);
-        // Try common response shapes; adapt if your provider differs
-        const text =
-          (j && j.text) ||
-          (j && j.output) ||
-          (j && j.result) ||
-          (j && j.choices && j.choices[0] && j.choices[0].text) ||
-          null;
-        cb(text || null);
-      } catch (e) {
-        console.error("phi-3 parse error:", e && e.message);
-        cb(null);
-      }
+    server.on('error', (err) => {
+      log('error', 'Server error on listen', { error: err && err.message });
+      reject(err);
     });
   });
+}
 
-  req.on("error", (err) => {
-    console.error("phi-3 request error:", err && err.message);
-    cb(null);
+async function shutdown(signal) {
+  log('info', 'shutdown initiated', { signal });
+  if (!server) {
+    process.exit(0);
+  }
+  server.close((err) => {
+    if (err) log('error', 'error closing server', { error: err && err.message });
+    else log('info', 'server closed gracefully');
   });
 
-  req.write(payload);
-  req.end();
+  // give connections a short grace period then destroy
+  const FORCE_TIMEOUT = Number(process.env.SHUTDOWN_TIMEOUT_MS || 5000);
+  const forceTimer = setTimeout(() => {
+    log('warn', 'forcing shutdown, destroying open connections', { openConnections: connections.size });
+    for (const s of connections) {
+      try { s.destroy(); } catch (e) { /* ignore */ }
+    }
+    process.exit(0);
+  }, FORCE_TIMEOUT);
+
+  if (connections.size === 0) {
+    clearTimeout(forceTimer);
+    process.exit(0);
+  } else {
+    const check = setInterval(() => {
+      if (connections.size === 0) {
+        clearInterval(check);
+        clearTimeout(forceTimer);
+        log('info', 'all connections closed, exiting');
+        process.exit(0);
+      }
+    }, 200);
+  }
 }
+
+// -----------------------------
+// Top-level startup wrapper
+// -----------------------------
+(async function main() {
+  try {
+    await startServer();
+    // Optional: any async initialization logic can go here
+  } catch (err) {
+    console.error('startup error', err);
+    process.exit(1);
+  }
+})();
+
+// -----------------------------
+// Signals and error handlers
+// -----------------------------
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+process.on('uncaughtException', (err) => {
+  log('error', 'uncaughtException', { error: err && (err.stack || err.message) });
+  // attempt graceful shutdown
+  shutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason) => {
+  log('error', 'unhandledRejection', { reason: reason && (reason.stack || reason) });
+});

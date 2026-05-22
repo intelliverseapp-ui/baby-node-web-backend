@@ -1,213 +1,214 @@
-// server.js
-const express = require("express");
-const path = require("path");
-const cors = require("cors");
-const http = require("http");
-const https = require("https");
+// server.js — World backend with graceful shutdown, structured logging, and aggressive retry
+'use strict';
+
+const express = require('express');
+const cors = require('cors');
+const http = require('http');
 
 const app = express();
-const PORT = 9000;
-
 app.use(cors());
 app.use(express.json());
 
-// Serve Inspector UI
-app.use(express.static(path.join(__dirname, "public")));
+// -----------------------------
+// Configuration
+// -----------------------------
+const PORT = process.env.PORT || 9000;
+const LOOKUP_URL = process.env.LOOKUP_URL || 'http://localhost:3000/v1/tools/web-lookup';
+const RETRY_ATTEMPTS = Number(process.env.RETRY_ATTEMPTS || 6);
+const BASE_DELAY_MS = Number(process.env.BASE_DELAY_MS || 300);
+const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS || 10000);
 
-// ------------------------------------------------------------
-// FIXED SSE PROXY ROUTE (NO HEADER PARSING, RAW STREAM PIPE)
-// ------------------------------------------------------------
-app.get("/mgi/live", (req, res) => {
-  const options = {
-    hostname: "127.0.0.1",
-    port: 8080,
-    path: "/mgi/live",
-    method: "GET",
-    headers: {
-      Accept: "text/event-stream"
-    }
+// -----------------------------
+// Structured logging helper
+// -----------------------------
+function log(level, msg, meta = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    msg,
+    ...meta
   };
+  // Use console.log for structured logs so they are easy to capture
+  console.log(JSON.stringify(entry));
+}
 
-  const proxyReq = http.request(options);
-
-  proxyReq.on("response", (proxyRes) => {
-    // Send SSE headers to browser
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive"
-    });
-
-    // Pipe raw SSE bytes directly from Swift → Browser
-    proxyRes.on("data", chunk => res.write(chunk));
-    proxyRes.on("end", () => res.end());
-  });
-
-  proxyReq.on("error", (err) => {
-    console.error("SSE proxy error:", err.message);
-    res.status(500).send("Swift backend unreachable");
-  });
-
-  proxyReq.end();
-});
-
-// ------------------------------------------------------------
-// PURE HTTP API PROXY (NO FETCH, NO UNDICI)
-// ------------------------------------------------------------
-app.use("/api", (req, res) => {
-  const body =
-    req.method === "GET" || req.method === "HEAD"
-      ? null
-      : JSON.stringify(req.body);
-
-  const options = {
-    hostname: "127.0.0.1",
-    port: 8080,
-    path: req.originalUrl.replace("/api", ""),
-    method: req.method,
-    headers: {
-      "Content-Type": "application/json",
-      "Content-Length": body ? Buffer.byteLength(body) : 0
-    }
-  };
-
-  const proxyReq = http.request(options, (proxyRes) => {
-    let data = "";
-    proxyRes.on("data", chunk => (data += chunk));
-    proxyRes.on("end", () => {
-      res.status(proxyRes.statusCode).send(data);
-    });
-  });
-
-  proxyReq.on("error", (err) => {
-    console.error("API proxy error:", err.message);
-    res.status(500).send("Swift backend unreachable");
-  });
-
-  if (body) proxyReq.write(body);
-  proxyReq.end();
-});
-
-// ------------------------------------------------------------
-// START WORLD BACKEND
-// ------------------------------------------------------------
-app.get("/health", (req, res) => { res.type("text/plain").status(200).send("ok"); });
-app.listen(PORT, () => {
-  console.log(`World backend running on http://localhost:${PORT}`);
-});
-
-// ------------------------------------------------------------
-// HYBRID MINI-AI ROUTE
-// 1) Query local web-lookup on port 3000
-// 2) If lookup returns a usable answer, return it
-// 3) Otherwise call external model endpoint (placeholder) and return model output
-// 4) Final fallback: echo
-// ------------------------------------------------------------
-app.post("/tool/mini-ai", express.json(), (req, res) => {
-  const prompt = req.body && req.body.prompt;
-  if (!prompt) return res.json({ result: "no prompt provided" });
-
-  // Helper: final echo fallback
-  const echoFallback = () => res.json({ result: "MiniAI echo: " + prompt });
-
-  // 1) Ask local web-lookup
+// -----------------------------
+// Fetch compatibility (global fetch or node-fetch fallback)
+// -----------------------------
+let fetchFn = global.fetch;
+if (!fetchFn) {
   try {
-    const lookupOptions = {
-      hostname: "127.0.0.1",
-      port: 3000,
-      path: "/v1/tools/web-lookup",
-      method: "POST",
-      headers: { "Content-Type": "application/json" }
-    };
-
-    const lookupReq = http.request(lookupOptions, (lookupRes) => {
-      let data = "";
-      lookupRes.on("data", (chunk) => (data += chunk));
-      lookupRes.on("end", async () => {
-        let lookupAnswer = null;
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed && parsed.answer) lookupAnswer = parsed.answer;
-        } catch (e) {
-          // parse error -> treat as no lookup answer
-        }
-
-        // If web-lookup returned a short factual answer, return it
-        if (lookupAnswer && lookupAnswer.length > 0 && lookupAnswer.length < 2000) {
-          return res.json({ result: lookupAnswer });
-        }
-
-        // 2) Fallback to external model (HTTPS)
-        try {
-          // Replace host/path and response parsing with your provider specifics
-          const externalHost = "api.example.com";
-          const externalPath = "/v1/generate";
-          const apiKey = process.env.EXTERNAL_MODEL_API_KEY || "";
-
-          if (!apiKey) {
-            // No API key configured; return echo fallback
-            return echoFallback();
-          }
-
-          const payload = JSON.stringify({
-            prompt: `Context: ${lookupAnswer || ""}\n\nUser prompt: ${prompt}`,
-            max_tokens: 512
-          });
-
-          const extOptions = {
-            hostname: externalHost,
-            path: externalPath,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(payload),
-              "Authorization": `Bearer ${apiKey}`
-            }
-          };
-
-          const extReq = https.request(extOptions, (extRes) => {
-            let extData = "";
-            extRes.on("data", (chunk) => (extData += chunk));
-            extRes.on("end", () => {
-              try {
-                const extJson = JSON.parse(extData);
-                // Adjust extraction depending on provider response shape
-                const modelText = extJson && (extJson.text || extJson.output || extJson.result || (extJson.choices && extJson.choices[0] && extJson.choices[0].text)) || null;
-                if (modelText) {
-                  return res.json({ result: modelText });
-                } else {
-                  return echoFallback();
-                }
-              } catch (e) {
-                return echoFallback();
-              }
-            });
-          });
-
-          extReq.on("error", (err) => {
-            console.error("External model request error:", err && err.message);
-            return echoFallback();
-          });
-
-          extReq.write(payload);
-          extReq.end();
-        } catch (err) {
-          console.error("External model fallback error:", err && err.message);
-          return echoFallback();
-        }
-      });
-    });
-
-    lookupReq.on("error", (err) => {
-      console.error("Local web-lookup error:", err && err.message);
-      // If lookup fails, fallback to echo (or external model if you prefer)
-      return echoFallback();
-    });
-
-    lookupReq.write(JSON.stringify({ query: prompt }));
-    lookupReq.end();
-  } catch (err) {
-    console.error("mini-ai route error:", err && err.message);
-    return echoFallback();
+    // node-fetch v3 is ESM; require may work in some setups if installed as CommonJS bridge.
+    // If this fails, install node-fetch or run on Node 18+.
+    fetchFn = require('node-fetch');
+    log('info', 'Using node-fetch fallback');
+  } catch (e) {
+    log('warn', 'No global fetch and node-fetch not available. Install node-fetch or use Node 18+.', { error: e && e.message });
   }
+}
+
+// -----------------------------
+// Retry helper with exponential backoff and jitter
+// -----------------------------
+async function fetchWithRetry(url, options = {}, attempts = RETRY_ATTEMPTS, baseDelayMs = BASE_DELAY_MS) {
+  if (!fetchFn) throw new Error('No fetch implementation available');
+  for (let i = 0; i < attempts; i++) {
+    const attempt = i + 1;
+    const start = Date.now();
+    try {
+      const res = await fetchFn(url, options);
+      const duration = Date.now() - start;
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`status ${res.status} ${text}`);
+      }
+      const json = await res.json().catch(() => null);
+      log('info', 'fetchWithRetry success', { url, attempt, duration });
+      return json;
+    } catch (err) {
+      const duration = Date.now() - start;
+      log('warn', 'fetchWithRetry attempt failed', { url, attempt, duration, error: err && err.message });
+      if (i === attempts - 1) {
+        log('error', 'fetchWithRetry exhausted attempts', { url, attempts });
+        throw err;
+      }
+      // Exponential backoff with jitter
+      const exp = Math.pow(2, i);
+      const jitter = Math.floor(Math.random() * baseDelayMs);
+      const delay = Math.min(baseDelayMs * exp + jitter, 5000);
+      log('info', 'fetchWithRetry sleeping before retry', { url, nextAttempt: attempt + 1, delayMs: delay });
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
+// -----------------------------
+// Request logging middleware
+// -----------------------------
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    log('info', 'http_request', { method: req.method, path: req.originalUrl, status: res.statusCode, durationMs: duration });
+  });
+  next();
+});
+
+// Health endpoint
+app.get('/health', (req, res) => res.send('ok'));
+
+// Main route: /tool/mini-ai
+app.post('/tool/mini-ai', async (req, res) => {
+  const { prompt } = req.body;
+  if (!prompt) {
+    log('warn', 'missing prompt in request');
+    return res.status(400).json({ error: 'Missing prompt in request body' });
+  }
+
+  // Try local lookup service with retries
+  try {
+    const lookupResp = await fetchWithRetry(
+      LOOKUP_URL,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: prompt })
+      },
+      RETRY_ATTEMPTS,
+      BASE_DELAY_MS
+    );
+
+    if (lookupResp && (lookupResp.answer || lookupResp.result || lookupResp.text)) {
+      const answer = lookupResp.answer || lookupResp.result || lookupResp.text;
+      log('info', 'served answer from lookup', { prompt });
+      return res.json({ result: answer });
+    }
+
+    if (lookupResp) {
+      log('info', 'lookup returned nonstandard payload', { prompt });
+      return res.json({ result: lookupResp });
+    }
+  } catch (err) {
+    log('warn', 'Local web-lookup error, falling back to local response', { error: err && err.message });
+  }
+
+  // Deterministic local fallback
+  const fallback = `MiniAI echo: ${prompt}`;
+  log('info', 'served fallback response', { prompt });
+  res.json({ result: fallback });
+});
+
+// -----------------------------
+// Create HTTP server and track connections for graceful shutdown
+// -----------------------------
+const server = http.createServer(app);
+
+// Track open connections so we can close them on shutdown
+const connections = new Set();
+server.on('connection', (socket) => {
+  connections.add(socket);
+  socket.on('close', () => connections.delete(socket));
+});
+
+server.listen(PORT, () => {
+  log('info', 'World backend running', { url: `http://localhost:${PORT}` });
+});
+
+// -----------------------------
+// Graceful shutdown
+// -----------------------------
+let shuttingDown = false;
+function startShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log('info', 'shutdown initiated', { signal });
+
+  // Stop accepting new connections
+  server.close((err) => {
+    if (err) {
+      log('error', 'error closing server', { error: err && err.message });
+    } else {
+      log('info', 'server closed gracefully');
+    }
+  });
+
+  // Give existing connections some time to finish
+  const forceTimer = setTimeout(() => {
+    log('warn', 'forcing shutdown, destroying open connections', { openConnections: connections.size });
+    for (const socket of connections) {
+      try { socket.destroy(); } catch (e) { /* ignore */ }
+    }
+    process.exit(0);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  // If all connections close before timeout, clear the timer and exit
+  if (connections.size === 0) {
+    clearTimeout(forceTimer);
+    process.exit(0);
+  } else {
+    // When last connection closes, exit
+    const checkInterval = setInterval(() => {
+      if (connections.size === 0) {
+        clearInterval(checkInterval);
+        clearTimeout(forceTimer);
+        log('info', 'all connections closed, exiting');
+        process.exit(0);
+      }
+    }, 200);
+  }
+}
+
+process.on('SIGINT', () => startShutdown('SIGINT'));
+process.on('SIGTERM', () => startShutdown('SIGTERM'));
+
+// Handle unexpected errors
+process.on('uncaughtException', (err) => {
+  log('error', 'uncaughtException', { error: err && err.stack || err && err.message });
+  // attempt graceful shutdown then exit
+  startShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason) => {
+  log('error', 'unhandledRejection', { reason: reason && (reason.stack || reason) });
+  // do not necessarily exit immediately; log for visibility
 });
