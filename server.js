@@ -1,1 +1,1 @@
-require('./index.js');
+require('./web-lookup-server.js');
