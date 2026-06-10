@@ -1,0 +1,2 @@
+{"timestamp":"2026-05-25T22:04:52.965Z","level":"info","msg":"Baby Node backend running","url":"http://localhost:3000","device_id":"beast-mac","revision_id":"local-dev"}
+{"timestamp":"2026-05-26T02:41:39.852Z","level":"info","msg":"shutdown initiated","signal":"SIGTERM"}
