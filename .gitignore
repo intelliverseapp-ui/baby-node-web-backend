@@ -1,3 +1,5 @@
 .env
 server.log
 web-lookup.log
+babynode_deploy_key
+babynode_deploy_key.pub
