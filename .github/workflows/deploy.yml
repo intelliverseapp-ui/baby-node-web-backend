@@ -1,0 +1,28 @@
+name: Baby Node Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests (if any)
+        run: npm test || echo "No tests defined"
+
+      # Placeholder deploy step
+      - name: Deploy (placeholder)
+        run: echo "Deploy step goes here (Render, SSH, etc.)"
