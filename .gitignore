@@ -1,5 +1,17 @@
+# Node dependencies
+node_modules/
+
+# Environment / secrets
 .env
-server.log
-web-lookup.log
 babynode_deploy_key
 babynode_deploy_key.pub
+
+# Logs and PIDs
+*.log
+*.pid
+
+# Archives / bundles
+baby-node-backend.zip
+
+# OS / editor junk
+.DS_Store
