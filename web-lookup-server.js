@@ -1,12 +1,22 @@
-// web-lookup-server.js — safe startup wrapper with graceful shutdown and structured logging
 'use strict';
 
 const express = require('express');
-const http = require('http');
+const https = require('https');
+const fs = require('fs');
 
 const PORT = process.env.PORT || 3000;
+
+// ⭐ Bind to ALL interfaces so Android can reach it
+const HOST = process.env.HOST || '0.0.0.0';
+
 const app = express();
 app.use(express.json());
+
+// Load HTTPS certificate + key
+const options = {
+  key: fs.readFileSync('server.key'),
+  cert: fs.readFileSync('server.crt')
+};
 
 // -----------------------------
 // Structured logger
@@ -17,18 +27,29 @@ function log(level, msg, meta = {}) {
 }
 
 // -----------------------------
-// Simple health endpoint
+// Health endpoint
 // -----------------------------
 app.get('/health', (req, res) => res.send('ok'));
 
 // -----------------------------
-// Place your existing handlers here
-// Example lookup route (replace with your real implementation)
+// ⭐ NEW: Baby NODE chat endpoint
+// -----------------------------
+app.post('/v1/chat', (req, res) => {
+  const { text } = req.body || {};
+  const reply = text
+    ? `You said: ${text}`
+    : "I didn't hear anything.";
+  res.json({ response: reply });
+});
+
+// -----------------------------
+// Example lookup route
 // -----------------------------
 app.post('/v1/tools/web-lookup', (req, res) => {
   const { query } = req.body || {};
-  // Replace the following with your real lookup logic
-  const answer = query ? `Thomas Edison is commonly credited with inventing the practical incandescent light bulb.` : null;
+  const answer = query
+    ? `Thomas Edison is commonly credited with inventing the practical incandescent light bulb.`
+    : null;
   res.json({ answer });
 });
 
@@ -40,15 +61,18 @@ let connections = new Set();
 
 function startServer() {
   return new Promise((resolve, reject) => {
-    server = http.createServer(app);
+    server = https.createServer(options, app);
 
     server.on('connection', (socket) => {
       connections.add(socket);
       socket.on('close', () => connections.delete(socket));
     });
 
-    server.listen(PORT, () => {
-      log('info', 'Web Lookup backend running', { url: process.env.BASE_URL || `http://localhost:${PORT}` });
+    // ⭐ FIXED: Bind to HOST instead of localhost
+    server.listen(PORT, HOST, () => {
+      log('info', 'Web Lookup backend running', {
+        url: `https://${HOST}:${PORT}`
+      });
       resolve();
     });
 
@@ -69,12 +93,13 @@ async function shutdown(signal) {
     else log('info', 'server closed gracefully');
   });
 
-  // give connections a short grace period then destroy
   const FORCE_TIMEOUT = Number(process.env.SHUTDOWN_TIMEOUT_MS || 5000);
   const forceTimer = setTimeout(() => {
-    log('warn', 'forcing shutdown, destroying open connections', { openConnections: connections.size });
+    log('warn', 'forcing shutdown, destroying open connections', {
+      openConnections: connections.size
+    });
     for (const s of connections) {
-      try { s.destroy(); } catch (e) { /* ignore */ }
+      try { s.destroy(); } catch (e) {}
     }
     process.exit(0);
   }, FORCE_TIMEOUT);
@@ -100,7 +125,6 @@ async function shutdown(signal) {
 (async function main() {
   try {
     await startServer();
-    // Optional: any async initialization logic can go here
   } catch (err) {
     console.error('startup error', err);
     process.exit(1);
@@ -115,7 +139,6 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 process.on('uncaughtException', (err) => {
   log('error', 'uncaughtException', { error: err && (err.stack || err.message) });
-  // attempt graceful shutdown
   shutdown('uncaughtException');
 });
 
