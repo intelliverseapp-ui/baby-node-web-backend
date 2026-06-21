@@ -1,4 +1,4 @@
-// server.js — Modular Baby Node Backend (Conductor Only)
+// server.js — Baby Node Backend (OSAction Conductor)
 
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -7,13 +7,9 @@ const cors = require('cors');
 // Routers
 const webLookupRouter = require('./web-lookup-server.js');
 
-// Modules (Baby Node Brain Components)
+// Modules
 const { callLocalLLM } = require('./modules/llm');
 const { callLookupTool } = require('./modules/lookup');
-const { applyPersonality } = require('./modules/personality');
-const { applyToneShaping } = require('./modules/tone-shaping');
-const { classifyTopic } = require('./modules/topic-classifier');
-const { detectUserIntent } = require('./modules/intent-detector');
 const { normalizeSTG } = require('./modules/stg');
 
 const app = express();
@@ -27,7 +23,7 @@ app.use(webLookupRouter);
 let continuityIndex = 0;
 
 // -----------------------------
-// POST /v1/chat — Modular Pipeline
+// POST /v1/chat — OSAction Pipeline
 // -----------------------------
 app.post('/v1/chat', async (req, res) => {
   const userText = req.body.text || '';
@@ -35,11 +31,7 @@ app.post('/v1/chat', async (req, res) => {
 
   let reply = null;
 
-  // 1. Topic + Intent
-  const topicType = classifyTopic(trimmed);
-  const userIntent = detectUserIntent(trimmed);
-
-  // 2. Lookup Tool
+  // 1. Lookup Tool (first priority)
   if (trimmed !== '') {
     const lookup = await callLookupTool(trimmed);
     if (lookup && lookup.answer) {
@@ -47,24 +39,48 @@ app.post('/v1/chat', async (req, res) => {
     }
   }
 
-  // 3. Local LLM (fallback)
+  // 2. Local LLM (fallback → OSAction JSON)
   if (!reply && trimmed !== '') {
     const llmAnswer = await callLocalLLM(trimmed);
-    if (llmAnswer) {
-      // 4. Tone shaping
-      const toned = applyToneShaping(llmAnswer, trimmed, { mode: "NEUTRAL", torque: 0 });
 
-      // 5. Personality
-      reply = applyPersonality(toned);
+    if (llmAnswer) {
+      try {
+        // MUST be valid JSON OSAction
+        const parsed = JSON.parse(llmAnswer);
+        reply = parsed;
+      } catch (err) {
+        // If LLM ever fails JSON (rare), fallback to plain text
+        reply = {
+          action: "none",
+          appName: null,
+          url: null,
+          number: null,
+          message: null,
+          level: null,
+          delta: null,
+          speech: "Mmhm — not sure what you want there."
+        };
+      }
     }
   }
 
-  // 6. Echo fallback
+  // 3. Echo fallback
   if (!reply) {
-    reply = trimmed === '' ? "I didn't receive any text." : trimmed;
+    reply = {
+      action: "none",
+      appName: null,
+      url: null,
+      number: null,
+      message: null,
+      level: null,
+      delta: null,
+      speech: trimmed === '' 
+        ? "Mmhm — I didn’t catch anything there."
+        : "Mmhm — not sure what you want there."
+    };
   }
 
-  // 7. STG envelope
+  // 4. STG envelope
   const stg = normalizeSTG({
     mode: "NEUTRAL",
     torque: 0,
@@ -82,5 +98,5 @@ app.post('/v1/chat', async (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[BABY NODE BACKEND] Modular server running at http://0.0.0.0:${PORT}`);
+  console.log(`[BABY NODE BACKEND] Server running at http://0.0.0.0:${PORT}`);
 });
