@@ -1,86 +1,71 @@
-// server.js — Baby Node Backend (OSAction Conductor)
+/**
+ * server.js — Baby Node Backend (OSAction Conductor)
+ * NEW VERSION WITH UNIVERSAL SEARCH + ACTION ROUTER + MEANING ENGINE
+ */
+
+// Disable Node 18's built‑in Undici fetch (prevents File/Blob crash)
+require('./modules/disable-undici');
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 
-// Routers
+// Legacy router (still mounted, not used by new pipeline)
 const webLookupRouter = require('./web-lookup-server.js');
 
 // Modules
-const { callLocalLLM } = require('./modules/llm');
-const { callLookupTool } = require('./modules/lookup');
 const { normalizeSTG } = require('./modules/stg');
+const { routeAction } = require('./modules/action-router');
+const { process: processMeaning } = require('./modules/meaning-engine');
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// Attach lookup tool routes
+// Attach legacy lookup tool routes (safe to keep for now)
 app.use(webLookupRouter);
 
 // Continuity index for STG
 let continuityIndex = 0;
 
 // -----------------------------
-// POST /v1/chat — OSAction Pipeline
+// GET /api/health — Health Check
+// -----------------------------
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: "ok",
+    time: new Date().toISOString(),
+    engine: "Baby Node Merged Backend",
+    modules: ["LLM", "UniversalSearch", "ActionRouter", "STG", "MeaningEngine"],
+    continuityIndex
+  });
+});
+
+// -----------------------------
+// GET /v1/ping — NEW PING ENDPOINT
+// -----------------------------
+app.get('/v1/ping', (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Baby Node backend alive",
+    time: new Date().toISOString()
+  });
+});
+
+// -----------------------------
+// POST /v1/chat — NEW OSAction Pipeline
 // -----------------------------
 app.post('/v1/chat', async (req, res) => {
   const userText = req.body.text || '';
   const trimmed = userText.trim();
 
-  let reply = null;
+  // 1. Meaning Engine → memory-aware OSAction JSON
+  const parsed = await processMeaning(trimmed);
 
-  // 1. Lookup Tool (first priority)
-  if (trimmed !== '') {
-    const lookup = await callLookupTool(trimmed);
-    if (lookup && lookup.answer) {
-      reply = lookup.answer;
-    }
-  }
+  // 2. Route the OSAction (search or normal)
+  const finalAction = await routeAction(parsed);
 
-  // 2. Local LLM (fallback → OSAction JSON)
-  if (!reply && trimmed !== '') {
-    const llmAnswer = await callLocalLLM(trimmed);
-
-    if (llmAnswer) {
-      try {
-        // MUST be valid JSON OSAction
-        const parsed = JSON.parse(llmAnswer);
-        reply = parsed;
-      } catch (err) {
-        // If LLM ever fails JSON (rare), fallback to plain text
-        reply = {
-          action: "none",
-          appName: null,
-          url: null,
-          number: null,
-          message: null,
-          level: null,
-          delta: null,
-          speech: "Mmhm — not sure what you want there."
-        };
-      }
-    }
-  }
-
-  // 3. Echo fallback
-  if (!reply) {
-    reply = {
-      action: "none",
-      appName: null,
-      url: null,
-      number: null,
-      message: null,
-      level: null,
-      delta: null,
-      speech: trimmed === '' 
-        ? "Mmhm — I didn’t catch anything there."
-        : "Mmhm — not sure what you want there."
-    };
-  }
-
-  // 4. STG envelope
+  // 3. STG envelope
   const stg = normalizeSTG({
     mode: "NEUTRAL",
     torque: 0,
@@ -90,13 +75,15 @@ app.post('/v1/chat', async (req, res) => {
   });
 
   res.json({
-    reply,
+    reply: finalAction,
     stg
   });
 });
 
+// -----------------------------
 // Start server
+// -----------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[BABY NODE BACKEND] Server running at http://0.0.0.0:${PORT}`);
+  console.log(`[BABY NODE MERGED BACKEND] Meaning Engine + Universal Search + STG active on port ${PORT}`);
 });
