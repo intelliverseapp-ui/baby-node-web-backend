@@ -3,12 +3,12 @@
  * NEW VERSION WITH UNIVERSAL SEARCH + ACTION ROUTER + MEANING ENGINE
  */
 
-// Disable Node 18's built‑in Undici fetch (prevents File/Blob crash)
 require('./modules/disable-undici');
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const path = require('path');
 
 // Legacy router (still mounted, not used by new pipeline)
 const webLookupRouter = require('./web-lookup-server.js');
@@ -22,7 +22,15 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// Attach legacy lookup tool routes (safe to keep for now)
+// -------------------------------------------------------------
+// STATIC MODEL FILES FOR ANDROID (CRITICAL FOR BABY NODE BOOT)
+// -------------------------------------------------------------
+// Serves everything in /model, including:
+//  - babynode_phi3.onnx
+//  - babynode_phi3.onnx.data
+app.use('/model', express.static(path.join(__dirname, 'model')));
+
+// Attach legacy lookup tool routes
 app.use(webLookupRouter);
 
 // Continuity index for STG
@@ -33,10 +41,10 @@ let continuityIndex = 0;
 // -----------------------------
 app.get('/api/health', (req, res) => {
   res.json({
-    status: "ok",
+    status: 'ok',
     time: new Date().toISOString(),
-    engine: "Baby Node Merged Backend",
-    modules: ["LLM", "UniversalSearch", "ActionRouter", "STG", "MeaningEngine"],
+    engine: 'Baby Node Merged Backend',
+    modules: ['LLM', 'UniversalSearch', 'ActionRouter', 'STG', 'MeaningEngine'],
     continuityIndex
   });
 });
@@ -46,14 +54,14 @@ app.get('/api/health', (req, res) => {
 // -----------------------------
 app.get('/v1/ping', (req, res) => {
   res.json({
-    status: "ok",
-    message: "Baby Node backend alive",
+    status: 'ok',
+    message: 'Baby Node backend alive',
     time: new Date().toISOString()
   });
 });
 
 // -----------------------------
-// POST /v1/chat — NEW OSAction Pipeline
+// POST /v1/chat — OSAction Pipeline
 // -----------------------------
 app.post('/v1/chat', async (req, res) => {
   const userText = req.body.text || '';
@@ -67,7 +75,7 @@ app.post('/v1/chat', async (req, res) => {
 
   // 3. STG envelope
   const stg = normalizeSTG({
-    mode: "NEUTRAL",
+    mode: 'NEUTRAL',
     torque: 0,
     continuity: 1.0,
     drift: 0.0,
@@ -85,5 +93,7 @@ app.post('/v1/chat', async (req, res) => {
 // -----------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[BABY NODE MERGED BACKEND] Meaning Engine + Universal Search + STG active on port ${PORT}`);
+  console.log(
+    `[BABY NODE MERGED BACKEND] Meaning Engine + Universal Search + STG active on port ${PORT}`
+  );
 });
