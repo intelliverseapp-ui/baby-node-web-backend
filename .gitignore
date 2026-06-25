@@ -1,17 +1,59 @@
 # Node dependencies
 node_modules/
 
-# Environment / secrets
+# Environment and secrets
 .env
 babynode_deploy_key
 babynode_deploy_key.pub
 
-# Logs and PIDs
+# Model artifacts and large binaries (do not commit)
+model/
+*.onnx
+*.data
+*.pt
+*.bin
+*.ckpt
+*.tar.gz
+*.zip
+*.apk
+
+# Runtime files, logs and PIDs
 *.log
 *.pid
+server.pid
 
-# Archives / bundles
+# Archives and bundles
 baby-node-backend.zip
 
-# OS / editor junk
+# OS and editor junk
 .DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Build artifacts
+build/
+dist/
+.gradle/
+out/
+*.class
+*.jar
+
+# Python virtualenv / caches
+.venv/
+env/
+venv/
+__pycache__/
+*.pyc
+pip-wheel-metadata/
+.pytest_cache/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Optional: Git LFS tracked files (if you use Git LFS for large models)
+# .gitattributes
+
+# Keep repository clean: add any other large or sensitive files here
